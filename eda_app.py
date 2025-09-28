@@ -5,17 +5,10 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from io import BytesIO
-from itertools import combinations
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-
-# Extra for PDF table extraction
-try:
-    import camelot
-except:
-    camelot = None
 
 # Page config
 st.set_page_config(page_title="EDA Web App", layout="wide")
@@ -23,58 +16,21 @@ st.set_page_config(page_title="EDA Web App", layout="wide")
 # App title
 st.title("📊 Exploratory Data Analysis (EDA) Web App")
 
-# File uploader (CSV + Excel + PDF)
-uploaded_file = st.file_uploader("Upload your CSV, Excel, or PDF file", type=["csv", "xlsx", "xls", "pdf"])
-
-# Google Sheets link input
-sheet_url = st.text_input("Or paste a Google Sheets link (must be public/shareable):")
+# File uploader (CSV only)
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
 df = None
 
 if uploaded_file:
-    if uploaded_file.name.endswith(".pdf"):
-        if camelot is None:
-            st.error("⚠️ Please install camelot: pip install camelot-py[cv]")
-        else:
-            try:
-                tables = camelot.read_pdf(uploaded_file, pages="all")
-                if tables and len(tables) > 0:
-                    df = tables[0].df  # take first table
-                    st.success("✅ Loaded table from PDF successfully")
-                else:
-                    st.error("❌ No tables found in PDF")
-            except Exception as e:
-                st.error(f"PDF reading failed: {e}")
-    else:
-        # Try CSV first
-        encodings_to_try = ["utf-8", "utf-8-sig", "latin1", "ISO-8859-1", "cp1252"]
-        for enc in encodings_to_try:
-            try:
-                df = pd.read_csv(uploaded_file, encoding=enc, on_bad_lines="skip")
-                st.success(f"✅ File loaded successfully as CSV using {enc} encoding")
-                break
-            except Exception:
-                df = None
-
-        # If CSV failed → try Excel
-        if df is None:
-            try:
-                df = pd.read_excel(uploaded_file, engine="openpyxl")
-                st.success("✅ File loaded successfully as Excel")
-            except Exception:
-                df = None
-
-elif sheet_url:
-    try:
-        if "docs.google.com" in sheet_url:
-            if "export?format=csv" not in sheet_url:
-                sheet_url = sheet_url.replace("/edit#gid=", "/export?format=csv&gid=")
-            df = pd.read_csv(sheet_url)
-            st.success("✅ Loaded Google Sheet successfully")
-        else:
-            st.error("❌ Please enter a valid Google Sheets link")
-    except Exception as e:
-        st.error(f"Failed to load Google Sheet: {e}")
+    # Try different encodings
+    encodings_to_try = ["utf-8", "utf-8-sig", "latin1", "ISO-8859-1", "cp1252"]
+    for enc in encodings_to_try:
+        try:
+            df = pd.read_csv(uploaded_file, encoding=enc, on_bad_lines="skip")
+            st.success(f"✅ File loaded successfully as CSV using {enc} encoding")
+            break
+        except Exception:
+            df = None
 
 # Proceed only if DataFrame loaded
 if df is not None:
@@ -184,6 +140,57 @@ if df is not None:
         # Duplicate values
         elements.append(Paragraph("🔁 Duplicate Values", styles['Heading2']))
         elements.append(Paragraph(f"Number of duplicate rows: {duplicate_count}", styles['Normal']))
+        elements.append(Spacer(1, 12))
+
+        # Add Histogram to PDF
+        if numeric_cols:
+            fig, ax = plt.subplots()
+            sns.histplot(df[numeric_cols[0]], kde=True, ax=ax)
+            img_buf = BytesIO()
+            fig.savefig(img_buf, format="png")
+            plt.close(fig)
+            img_buf.seek(0)
+            elements.append(Paragraph(f"Histogram of {numeric_cols[0]}", styles['Heading2']))
+            elements.append(RLImage(img_buf, width=400, height=250))
+            elements.append(Spacer(1, 12))
+
+        # Add Bar Chart to PDF
+        if cat_cols:
+            fig, ax = plt.subplots()
+            df[cat_cols[0]].value_counts().plot(kind="bar", ax=ax)
+            img_buf = BytesIO()
+            fig.savefig(img_buf, format="png")
+            plt.close(fig)
+            img_buf.seek(0)
+            elements.append(Paragraph(f"Bar Chart of {cat_cols[0]}", styles['Heading2']))
+            elements.append(RLImage(img_buf, width=400, height=250))
+            elements.append(Spacer(1, 12))
+
+        # Add Pie Chart to PDF
+        if cat_cols:
+            pie_data = df[cat_cols[0]].value_counts()
+            fig, ax = plt.subplots()
+            ax.pie(pie_data, labels=pie_data.index, autopct="%1.1f%%", startangle=90)
+            ax.axis("equal")
+            img_buf = BytesIO()
+            fig.savefig(img_buf, format="png")
+            plt.close(fig)
+            img_buf.seek(0)
+            elements.append(Paragraph(f"Pie Chart of {cat_cols[0]}", styles['Heading2']))
+            elements.append(RLImage(img_buf, width=400, height=250))
+            elements.append(Spacer(1, 12))
+
+        # Add Scatter Plot to PDF
+        if len(numeric_cols) >= 2:
+            fig, ax = plt.subplots()
+            sns.scatterplot(data=df, x=numeric_cols[0], y=numeric_cols[1], ax=ax)
+            img_buf = BytesIO()
+            fig.savefig(img_buf, format="png")
+            plt.close(fig)
+            img_buf.seek(0)
+            elements.append(Paragraph(f"Scatter Plot ({numeric_cols[0]} vs {numeric_cols[1]})", styles['Heading2']))
+            elements.append(RLImage(img_buf, width=400, height=250))
+            elements.append(Spacer(1, 12))
 
         doc.build(elements)
         pdf = buffer.getvalue()
@@ -198,4 +205,3 @@ if df is not None:
         file_name="EDA_Report.pdf",
         mime="application/pdf"
     )
-
